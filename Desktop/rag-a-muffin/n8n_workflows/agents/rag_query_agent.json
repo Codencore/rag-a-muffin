@@ -1,0 +1,178 @@
+{
+  "name": "RAG_Intelligence_Query_Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "commercial-query",
+        "httpMethod": "POST",
+        "authentication": "headerAuth"
+      },
+      "id": "query_webhook",
+      "name": "Query_Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "typeVersion": 1.1,
+      "webhookId": "commercial-query-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Guardrail: Input Sanitization\nconst query = $json.query || '';\nconst sanitized = query.replace(/<script[^>]*>.*?<\\/script>/gi, '')\n                      .replace(/javascript:/gi, '')\n                      .trim();\n\nif (sanitized.length > 1000) {\n  throw new Error('Query too long - potential security issue');\n}\n\nreturn [{json: {sanitized_query: sanitized, original_query: query}}];"
+      },
+      "id": "query_sanitization",
+      "name": "Query_Sanitization",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.OPENAI_API_URL }}/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"model\": \"gpt-4-turbo\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a relevance classifier for commercial queries. Reply only 'RELEVANT' or 'NOT_RELEVANT'.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"{{ $json.sanitized_query }}\"\n    }\n  ],\n  \"max_tokens\": 10\n}",
+        "options": {}
+      },
+      "id": "relevance_check",
+      "name": "Relevance_Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 300],
+      "typeVersion": 4.1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai_api_credentials",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.CHROMADB_ENDPOINT }}/api/v1/collections/commercial_data/query",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"query_texts\": [\"{{ $json.sanitized_query }}\"],\n  \"n_results\": 10,\n  \"include\": [\"documents\", \"metadatas\", \"distances\"]\n}",
+        "options": {}
+      },
+      "id": "vector_search",
+      "name": "Vector_Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [900, 300],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Assemble context from vector search results\nconst results = $json.documents[0] || [];\nconst metadata = $json.metadatas[0] || [];\nconst distances = $json.distances[0] || [];\n\nconst context = results.map((doc, i) => {\n  return {\n    content: doc,\n    source: metadata[i]?.source || 'unknown',\n    relevance_score: 1 - distances[i]\n  };\n}).filter(item => item.relevance_score > 0.7);\n\nreturn [{json: {context, query: $node['Query_Sanitization'].json.sanitized_query}}];"
+      },
+      "id": "context_assembly",
+      "name": "Context_Assembly",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.OPENAI_API_URL }}/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"model\": \"gpt-4-turbo\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a commercial analytics expert. Use only the provided context to answer questions about sales performance. If the context doesn't contain relevant information, clearly state that.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Context: {{ JSON.stringify($json.context) }}\\n\\nQuestion: {{ $json.query }}\"\n    }\n  ],\n  \"max_tokens\": 1500,\n  \"temperature\": 0.3\n}",
+        "options": {}
+      },
+      "id": "llm_response_generation",
+      "name": "LLM_Response_Generation",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1340, 300],
+      "typeVersion": 4.1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai_api_credentials",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Guardrail: Output Validation\nconst response = $json.choices[0]?.message?.content || '';\n\n// Check for potential hallucinations or off-topic responses\nif (response.includes('I don\\'t have') || response.includes('cannot find')) {\n  return [{json: {status: 'no_data', response, query: $node['Context_Assembly'].json.query}}];\n}\n\n// Basic validation for commercial relevance\nconst commercialTerms = ['sales', 'revenue', 'performance', 'agent', 'target', 'quota'];\nconst hasCommercialContext = commercialTerms.some(term => \n  response.toLowerCase().includes(term)\n);\n\nif (!hasCommercialContext) {\n  return [{json: {status: 'validation_failed', response, issue: 'No commercial context detected'}}];\n}\n\nreturn [{json: {status: 'validated', response, query: $node['Context_Assembly'].json.query}}];"
+      },
+      "id": "response_validation",
+      "name": "Response_Validation",
+      "type": "n8n-nodes-base.code",
+      "position": [1560, 300],
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "Query_Webhook": {
+      "main": [
+        [
+          {
+            "node": "Query_Sanitization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query_Sanitization": {
+      "main": [
+        [
+          {
+            "node": "Relevance_Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Relevance_Check": {
+      "main": [
+        [
+          {
+            "node": "Vector_Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vector_Search": {
+      "main": [
+        [
+          {
+            "node": "Context_Assembly",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Context_Assembly": {
+      "main": [
+        [
+          {
+            "node": "LLM_Response_Generation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Response_Generation": {
+      "main": [
+        [
+          {
+            "node": "Response_Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1"
+}
