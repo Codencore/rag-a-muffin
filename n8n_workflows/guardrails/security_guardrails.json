@@ -1,0 +1,34 @@
+{
+  "name": "Security_Guardrails_Template",
+  "description": "Template per implementare guardrails di sicurezza",
+  "components": [
+    {
+      "name": "PII_Filter",
+      "type": "code",
+      "parameters": {
+        "jsCode": "// Guardrail: PII Filter\nconst input = $json.input || '';\n\n// Patterns per identificare PII\nconst piiPatterns = [\n  {\n    name: 'email',\n    regex: /\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b/g,\n    replacement: '[EMAIL_REDACTED]'\n  },\n  {\n    name: 'phone',\n    regex: /\\b\\d{3}[-.]?\\d{3}[-.]?\\d{4}\\b/g,\n    replacement: '[PHONE_REDACTED]'\n  },\n  {\n    name: 'ssn',\n    regex: /\\b\\d{3}-\\d{2}-\\d{4}\\b/g,\n    replacement: '[SSN_REDACTED]'\n  },\n  {\n    name: 'credit_card',\n    regex: /\\b\\d{4}[-\\s]?\\d{4}[-\\s]?\\d{4}[-\\s]?\\d{4}\\b/g,\n    replacement: '[CARD_REDACTED]'\n  }\n];\n\nlet sanitizedInput = input;\nconst foundPII = [];\n\npiiPatterns.forEach(pattern => {\n  const matches = input.match(pattern.regex);\n  if (matches) {\n    foundPII.push({\n      type: pattern.name,\n      count: matches.length\n    });\n    sanitizedInput = sanitizedInput.replace(pattern.regex, pattern.replacement);\n  }\n});\n\nreturn [{\n  json: {\n    sanitized_input: sanitizedInput,\n    pii_found: foundPII,\n    pii_detected: foundPII.length > 0\n  }\n}];"
+      }
+    },
+    {
+      "name": "Input_Validation",
+      "type": "code",
+      "parameters": {
+        "jsCode": "// Guardrail: Input Validation\nconst input = $json.input || '';\nconst maxLength = 2000;\nconst errors = [];\n\n// Check length\nif (input.length > maxLength) {\n  errors.push(`Input too long: ${input.length} characters (max: ${maxLength})`);\n}\n\n// Check for malicious patterns\nconst maliciousPatterns = [\n  {\n    name: 'script_injection',\n    regex: /<script[^>]*>.*?<\\/script>/gi,\n    description: 'Script injection detected'\n  },\n  {\n    name: 'sql_injection',\n    regex: /(union|select|insert|update|delete|drop|create|alter)\\s+/gi,\n    description: 'Potential SQL injection'\n  },\n  {\n    name: 'command_injection',\n    regex: /(;|\\||&|\\$\\(|`)/g,\n    description: 'Command injection patterns'\n  }\n];\n\nmaliciousPatterns.forEach(pattern => {\n  if (pattern.regex.test(input)) {\n    errors.push(pattern.description);\n  }\n});\n\nif (errors.length > 0) {\n  throw new Error(`Input validation failed: ${errors.join(', ')}`);\n}\n\nreturn [{\n  json: {\n    validated_input: input,\n    validation_passed: true\n  }\n}];"
+      }
+    },
+    {
+      "name": "Output_Safety",
+      "type": "code",
+      "parameters": {
+        "jsCode": "// Guardrail: Output Safety Check\nconst output = $json.output || '';\nconst safetyChecks = [];\n\n// Check for potential data leakage\nconst sensitivePatterns = [\n  {\n    name: 'api_key',\n    regex: /\\b[A-Za-z0-9]{32,}\\b/g,\n    description: 'Potential API key detected'\n  },\n  {\n    name: 'password',\n    regex: /password[:\\s=]+[^\\s]+/gi,\n    description: 'Password information detected'\n  },\n  {\n    name: 'token',\n    regex: /token[:\\s=]+[^\\s]+/gi,\n    description: 'Token information detected'\n  }\n];\n\nsensitivePatterns.forEach(pattern => {\n  if (pattern.regex.test(output)) {\n    safetyChecks.push({\n      type: pattern.name,\n      description: pattern.description,\n      severity: 'high'\n    });\n  }\n});\n\n// Check for inappropriate content\nconst inappropriateTerms = ['hack', 'exploit', 'vulnerability', 'password', 'secret'];\nconst foundInappropriate = inappropriateTerms.filter(term => \n  output.toLowerCase().includes(term)\n);\n\nif (foundInappropriate.length > 0) {\n  safetyChecks.push({\n    type: 'inappropriate_content',\n    description: `Potentially inappropriate terms: ${foundInappropriate.join(', ')}`,\n    severity: 'medium'\n  });\n}\n\nconst hasHighSeverityIssues = safetyChecks.some(check => check.severity === 'high');\n\nif (hasHighSeverityIssues) {\n  throw new Error('Output safety check failed - high severity issues detected');\n}\n\nreturn [{\n  json: {\n    safe_output: output,\n    safety_checks: safetyChecks,\n    safety_passed: true\n  }\n}];"
+      }
+    },
+    {
+      "name": "Access_Control",
+      "type": "code",
+      "parameters": {
+        "jsCode": "// Guardrail: Access Control\nconst userId = $json.user_id || '';\nconst requestedResource = $json.resource || '';\nconst action = $json.action || 'read';\n\n// Define permissions\nconst permissions = {\n  'admin': ['read', 'write', 'delete', 'admin'],\n  'manager': ['read', 'write'],\n  'user': ['read'],\n  'guest': []\n};\n\n// Get user role (simplified - in production, fetch from database)\nconst userRole = $env.USER_ROLES ? JSON.parse($env.USER_ROLES)[userId] : 'guest';\n\n// Check permissions\nconst allowedActions = permissions[userRole] || [];\nconst hasPermission = allowedActions.includes(action);\n\nif (!hasPermission) {\n  throw new Error(`Access denied: User ${userId} (role: ${userRole}) cannot perform action '${action}' on resource '${requestedResource}'`);\n}\n\nreturn [{\n  json: {\n    user_id: userId,\n    user_role: userRole,\n    resource: requestedResource,\n    action: action,\n    access_granted: true\n  }\n}];"
+      }
+    }
+  ],
+  "usage_example": {\n    "description": "Come utilizzare i guardrails in un workflow",\n    "workflow_snippet": {\n      "nodes": [\n        {\n          "name": "Apply_Security_Guardrails",\n          "type": "n8n-nodes-base.code",\n          "parameters": {\n            "jsCode": "// Applica tutti i guardrails di sicurezza\\nconst input = $json.user_input;\\n\\n// 1. PII Filter\\n// [Insert PII_Filter code here]\\n\\n// 2. Input Validation\\n// [Insert Input_Validation code here]\\n\\n// 3. Access Control\\n// [Insert Access_Control code here]\\n\\nreturn [{json: {processed_input: input, security_passed: true}}];"\n          }\n        }\n      ]\n    }\n  }\n}

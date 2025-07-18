@@ -1,0 +1,231 @@
+{
+  "name": "Alert_Management_Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "value": 15
+            }
+          ]
+        }
+      },
+      "id": "alert_schedule",
+      "name": "Alert_Schedule",
+      "type": "n8n-nodes-base.cron",
+      "position": [240, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    agent_id,\n    SUM(sales_amount) as current_sales,\n    target_total,\n    (SUM(sales_amount) / target_total * 100) as quota_percentage\nFROM raw_sales_data r\nJOIN agent_performance p ON r.agent_id = p.agent_id\nWHERE r.date = CURRENT_DATE\nGROUP BY agent_id, target_total\nHAVING quota_percentage < 50",
+        "options": {}
+      },
+      "id": "check_quota_alerts",
+      "name": "Check_Quota_Alerts",
+      "type": "n8n-nodes-base.postgres",
+      "position": [460, 200],
+      "typeVersion": 2.4,
+      "credentials": {
+        "postgres": {
+          "id": "postgres_commercial_db",
+          "name": "Commercial Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n    metric_name,\n    metric_value,\n    recorded_at\nFROM system_metrics \nWHERE metric_name IN ('api_response_time', 'error_rate', 'query_success_rate')\n    AND recorded_at > NOW() - INTERVAL '15 minutes'\n    AND (\n        (metric_name = 'api_response_time' AND metric_value > 3000) OR\n        (metric_name = 'error_rate' AND metric_value > 0.05) OR\n        (metric_name = 'query_success_rate' AND metric_value < 0.95)\n    )",
+        "options": {}
+      },
+      "id": "check_system_alerts",
+      "name": "Check_System_Alerts",
+      "type": "n8n-nodes-base.postgres",
+      "position": [460, 400],
+      "typeVersion": 2.4,
+      "credentials": {
+        "postgres": {
+          "id": "postgres_commercial_db",
+          "name": "Commercial Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process quota alerts\nconst quotaAlerts = $input.first().json || [];\nconst systemAlerts = $input.last().json || [];\n\nconst alerts = [];\n\n// Process quota alerts\nquotaAlerts.forEach(alert => {\n  alerts.push({\n    type: 'quota_warning',\n    severity: 'medium',\n    agent_id: alert.agent_id,\n    message: `Agent ${alert.agent_id} is at ${alert.quota_percentage.toFixed(1)}% of quota`,\n    data: alert,\n    timestamp: new Date().toISOString()\n  });\n});\n\n// Process system alerts\nsystemAlerts.forEach(alert => {\n  alerts.push({\n    type: 'system_alert',\n    severity: 'high',\n    metric: alert.metric_name,\n    message: `System metric ${alert.metric_name} is ${alert.metric_value}`,\n    data: alert,\n    timestamp: new Date().toISOString()\n  });\n});\n\nreturn alerts.length > 0 ? alerts.map(alert => ({json: alert})) : [];"
+      },
+      "id": "process_alerts",
+      "name": "Process_Alerts",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.severity }}",
+              "operation": "equal",
+              "value2": "high"
+            }
+          ]
+        }
+      },
+      "id": "severity_check",
+      "name": "Severity_Check",
+      "type": "n8n-nodes-base.if",
+      "position": [900, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SLACK_WEBHOOK_URL }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"text\": \"🚨 HIGH SEVERITY ALERT\",\n  \"attachments\": [\n    {\n      \"color\": \"danger\",\n      \"title\": \"{{ $json.type }}\",\n      \"text\": \"{{ $json.message }}\",\n      \"fields\": [\n        {\n          \"title\": \"Severity\",\n          \"value\": \"{{ $json.severity }}\",\n          \"short\": true\n        },\n        {\n          \"title\": \"Timestamp\",\n          \"value\": \"{{ $json.timestamp }}\",\n          \"short\": true\n        }\n      ]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "send_high_priority_alert",
+      "name": "Send_High_Priority_Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 200],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.EMAIL_API_ENDPOINT }}",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"to\": \"{{ $env.ADMIN_EMAIL }}\",\n  \"subject\": \"Commercial Analytics Alert: {{ $json.type }}\",\n  \"body\": \"Alert Details:\\n\\nType: {{ $json.type }}\\nSeverity: {{ $json.severity }}\\nMessage: {{ $json.message }}\\nTimestamp: {{ $json.timestamp }}\\n\\nData: {{ JSON.stringify($json.data) }}\"\n}",
+        "options": {}
+      },
+      "id": "send_email_alert",
+      "name": "Send_Email_Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 400],
+      "typeVersion": 4.1
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "commercial_data",
+        "table": "alerts",
+        "columns": "alert_type, severity, message, alert_data, created_at"
+      },
+      "id": "log_alert",
+      "name": "Log_Alert",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1340, 300],
+      "typeVersion": 2.4,
+      "credentials": {
+        "postgres": {
+          "id": "postgres_commercial_db",
+          "name": "Commercial Database"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Alert_Schedule": {
+      "main": [
+        [
+          {
+            "node": "Check_Quota_Alerts",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Check_System_Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check_Quota_Alerts": {
+      "main": [
+        [
+          {
+            "node": "Process_Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check_System_Alerts": {
+      "main": [
+        [
+          {
+            "node": "Process_Alerts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process_Alerts": {
+      "main": [
+        [
+          {
+            "node": "Severity_Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Severity_Check": {
+      "main": [
+        [
+          {
+            "node": "Send_High_Priority_Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send_Email_Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send_High_Priority_Alert": {
+      "main": [
+        [
+          {
+            "node": "Log_Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send_Email_Alert": {
+      "main": [
+        [
+          {
+            "node": "Log_Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1"
+}

@@ -1,0 +1,288 @@
+{
+  "name": "Commercial_Analytics_Manager",
+  "description": "Orchestratore centrale per analisi commerciali",
+  "pattern": "Manager-Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "commercial-analytics",
+        "httpMethod": "POST",
+        "authentication": "headerAuth"
+      },
+      "id": "main_trigger",
+      "name": "Main_Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "typeVersion": 1.1,
+      "webhookId": "commercial-analytics-manager"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Route request to appropriate sub-workflow\nconst requestType = $json.type || 'query';\nconst payload = $json.payload || {};\n\nconst routingMap = {\n  'data_ingestion': 'Commercial_Data_Ingestion_Agent',\n  'query': 'RAG_Intelligence_Query_Agent',\n  'report': 'Report_Generation_Agent',\n  'alert': 'Alert_Management_Agent'\n};\n\nconst targetWorkflow = routingMap[requestType];\n\nif (!targetWorkflow) {\n  throw new Error(`Unknown request type: ${requestType}`);\n}\n\nreturn [{\n  json: {\n    target_workflow: targetWorkflow,\n    request_type: requestType,\n    payload: payload,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "request_router",
+      "name": "Request_Router",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.target_workflow }}",
+              "operation": "equal",
+              "value2": "Commercial_Data_Ingestion_Agent"
+            }
+          ]
+        }
+      },
+      "id": "route_data_ingestion",
+      "name": "Route_Data_Ingestion",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 200],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.target_workflow }}",
+              "operation": "equal",
+              "value2": "RAG_Intelligence_Query_Agent"
+            }
+          ]
+        }
+      },
+      "id": "route_query",
+      "name": "Route_Query",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.target_workflow }}",
+              "operation": "equal",
+              "value2": "Report_Generation_Agent"
+            }
+          ]
+        }
+      },
+      "id": "route_report",
+      "name": "Route_Report",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 400],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.target_workflow }}",
+              "operation": "equal",
+              "value2": "Alert_Management_Agent"
+            }
+          ]
+        }
+      },
+      "id": "route_alert",
+      "name": "Route_Alert",
+      "type": "n8n-nodes-base.if",
+      "position": [680, 500],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "workflowId": "Commercial_Data_Ingestion_Agent",
+        "waitForExecution": true
+      },
+      "id": "execute_data_ingestion",
+      "name": "Execute_Data_Ingestion",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "position": [900, 150],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "workflowId": "RAG_Intelligence_Query_Agent",
+        "waitForExecution": true
+      },
+      "id": "execute_query",
+      "name": "Execute_Query",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "position": [900, 250],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "workflowId": "Report_Generation_Agent",
+        "waitForExecution": true
+      },
+      "id": "execute_report",
+      "name": "Execute_Report",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "position": [900, 350],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "workflowId": "Alert_Management_Agent",
+        "waitForExecution": true
+      },
+      "id": "execute_alert",
+      "name": "Execute_Alert",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "position": [900, 450],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate results from sub-workflows\nconst results = $input.all();\nconst aggregatedResult = {\n  manager: 'Commercial_Analytics_Manager',\n  processed_at: new Date().toISOString(),\n  results: results.map(item => item.json),\n  status: 'completed'\n};\n\nreturn [{json: aggregatedResult}];"
+      },
+      "id": "aggregate_results",
+      "name": "Aggregate_Results",
+      "type": "n8n-nodes-base.code",
+      "position": [1120, 300],
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "Main_Trigger": {
+      "main": [
+        [
+          {
+            "node": "Request_Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Request_Router": {
+      "main": [
+        [
+          {
+            "node": "Route_Data_Ingestion",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route_Query",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route_Report",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route_Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route_Data_Ingestion": {
+      "main": [
+        [
+          {
+            "node": "Execute_Data_Ingestion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route_Query": {
+      "main": [
+        [
+          {
+            "node": "Execute_Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route_Report": {
+      "main": [
+        [
+          {
+            "node": "Execute_Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route_Alert": {
+      "main": [
+        [
+          {
+            "node": "Execute_Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute_Data_Ingestion": {
+      "main": [
+        [
+          {
+            "node": "Aggregate_Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute_Query": {
+      "main": [
+        [
+          {
+            "node": "Aggregate_Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute_Report": {
+      "main": [
+        [
+          {
+            "node": "Aggregate_Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute_Alert": {
+      "main": [
+        [
+          {
+            "node": "Aggregate_Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1"
+}
