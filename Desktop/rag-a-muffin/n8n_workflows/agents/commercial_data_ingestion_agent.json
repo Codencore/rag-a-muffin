@@ -1,0 +1,179 @@
+{
+  "name": "Commercial_Data_Ingestion_Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "value": 1
+            }
+          ]
+        }
+      },
+      "id": "schedule_trigger",
+      "name": "Schedule_Trigger",
+      "type": "n8n-nodes-base.cron",
+      "position": [240, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $env.DATA_SOURCES_AVAILABLE }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "data_sources_check",
+      "name": "Data_Sources_Check",
+      "type": "n8n-nodes-base.if",
+      "position": [460, 300],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SALES_API_ENDPOINT }}",
+        "authentication": "headerAuth",
+        "options": {
+          "retry": {
+            "numberOfRetries": 3
+          }
+        }
+      },
+      "id": "extract_sales_data",
+      "name": "Extract_Sales_Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [680, 200],
+      "typeVersion": 4.1,
+      "credentials": {
+        "headerAuth": {
+          "id": "sales_api_credentials",
+          "name": "Sales API Access"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Guardrail: Data Quality Check\nconst data = $input.all();\nconst validatedData = data.filter(item => {\n  return item.json.sales_amount && item.json.date && item.json.agent_id;\n});\n\nif (validatedData.length < data.length * 0.8) {\n  throw new Error('Data quality below threshold - human intervention required');\n}\n\nreturn validatedData;"
+      },
+      "id": "data_quality_validation",
+      "name": "Data_Quality_Validation",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 200],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "commercial_data",
+        "table": "raw_sales_data",
+        "columns": "agent_id, sales_amount, date, product_category, customer_id, region, channel"
+      },
+      "id": "store_raw_data",
+      "name": "Store_Raw_Data",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1120, 200],
+      "typeVersion": 2.4,
+      "credentials": {
+        "postgres": {
+          "id": "postgres_commercial_db",
+          "name": "Commercial Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": "RAG_Document_Processing_Agent"
+      },
+      "id": "trigger_rag_processing",
+      "name": "Trigger_RAG_Processing",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "position": [1340, 200],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Human Intervention Alert\nconst alertData = {\n  type: 'data_source_unavailable',\n  message: 'Data sources are not available - manual intervention required',\n  timestamp: new Date().toISOString(),\n  priority: 'high'\n};\n\nreturn [{ json: alertData }];"
+      },
+      "id": "human_intervention_alert",
+      "name": "Human_Intervention_Alert",
+      "type": "n8n-nodes-base.code",
+      "position": [680, 400],
+      "typeVersion": 2
+    }
+  ],
+  "connections": {
+    "Schedule_Trigger": {
+      "main": [
+        [
+          {
+            "node": "Data_Sources_Check",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data_Sources_Check": {
+      "main": [
+        [
+          {
+            "node": "Extract_Sales_Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Human_Intervention_Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract_Sales_Data": {
+      "main": [
+        [
+          {
+            "node": "Data_Quality_Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Data_Quality_Validation": {
+      "main": [
+        [
+          {
+            "node": "Store_Raw_Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store_Raw_Data": {
+      "main": [
+        [
+          {
+            "node": "Trigger_RAG_Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1"
+}

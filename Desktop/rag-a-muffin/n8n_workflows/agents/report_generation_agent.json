@@ -1,0 +1,213 @@
+{
+  "name": "Report_Generation_Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "generate-report",
+        "httpMethod": "POST",
+        "authentication": "headerAuth"
+      },
+      "id": "report_trigger",
+      "name": "Report_Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 300],
+      "typeVersion": 1.1,
+      "webhookId": "report-generation-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate report request\nconst reportType = $json.report_type || 'daily';\nconst dateRange = $json.date_range || {};\nconst agents = $json.agents || [];\n\nif (!['daily', 'weekly', 'monthly', 'custom'].includes(reportType)) {\n  throw new Error('Invalid report type');\n}\n\nreturn [{json: {report_type: reportType, date_range: dateRange, agents}}];"
+      },
+      "id": "validate_request",
+      "name": "Validate_Request",
+      "type": "n8n-nodes-base.code",
+      "position": [460, 300],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n    agent_id,\n    SUM(sales_amount) as total_sales,\n    COUNT(*) as total_transactions,\n    AVG(sales_amount) as avg_transaction\nFROM raw_sales_data \nWHERE date >= '{{ $json.date_range.start }}' \n    AND date <= '{{ $json.date_range.end }}'\nGROUP BY agent_id\nORDER BY total_sales DESC",
+        "options": {}
+      },
+      "id": "fetch_sales_data",
+      "name": "Fetch_Sales_Data",
+      "type": "n8n-nodes-base.postgres",
+      "position": [680, 300],
+      "typeVersion": 2.4,
+      "credentials": {
+        "postgres": {
+          "id": "postgres_commercial_db",
+          "name": "Commercial Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=SELECT \n    agent_id,\n    metric_type,\n    metric_value\nFROM commercial_metrics \nWHERE period_start >= '{{ $json.date_range.start }}' \n    AND period_end <= '{{ $json.date_range.end }}'",
+        "options": {}
+      },
+      "id": "fetch_metrics",
+      "name": "Fetch_Metrics",
+      "type": "n8n-nodes-base.postgres",
+      "position": [680, 450],
+      "typeVersion": 2.4,
+      "credentials": {
+        "postgres": {
+          "id": "postgres_commercial_db",
+          "name": "Commercial Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine sales data and metrics\nconst salesData = $input.first().json;\nconst metricsData = $input.last().json;\n\nconst combinedData = {\n  sales_summary: salesData,\n  metrics: metricsData,\n  report_type: $node['Validate_Request'].json.report_type,\n  date_range: $node['Validate_Request'].json.date_range,\n  generated_at: new Date().toISOString()\n};\n\nreturn [{json: combinedData}];"
+      },
+      "id": "combine_data",
+      "name": "Combine_Data",
+      "type": "n8n-nodes-base.code",
+      "position": [900, 375],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.OPENAI_API_URL }}/chat/completions",
+        "method": "POST",
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"model\": \"gpt-4-turbo\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a commercial analytics expert. Generate a comprehensive report based on the provided sales data and metrics. Include key insights, trends, and recommendations.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Generate a {{ $json.report_type }} commercial report for the period {{ $json.date_range.start }} to {{ $json.date_range.end }}. Data: {{ JSON.stringify($json) }}\"\n    }\n  ],\n  \"max_tokens\": 2000,\n  \"temperature\": 0.3\n}",
+        "options": {}
+      },
+      "id": "generate_report_content",
+      "name": "Generate_Report_Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1120, 375],
+      "typeVersion": 4.1,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai_api_credentials",
+          "name": "OpenAI API Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format final report\nconst reportContent = $json.choices[0]?.message?.content || '';\nconst reportData = $node['Combine_Data'].json;\n\nconst formattedReport = {\n  id: `report_${Date.now()}`,\n  type: reportData.report_type,\n  period: reportData.date_range,\n  content: reportContent,\n  raw_data: reportData,\n  generated_at: new Date().toISOString(),\n  format: 'json'\n};\n\nreturn [{json: formattedReport}];"
+      },
+      "id": "format_report",
+      "name": "Format_Report",
+      "type": "n8n-nodes-base.code",
+      "position": [1340, 375],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "schema": "commercial_data",
+        "table": "reports",
+        "columns": "report_id, report_type, report_content, generated_at"
+      },
+      "id": "store_report",
+      "name": "Store_Report",
+      "type": "n8n-nodes-base.postgres",
+      "position": [1560, 375],
+      "typeVersion": 2.4,
+      "credentials": {
+        "postgres": {
+          "id": "postgres_commercial_db",
+          "name": "Commercial Database"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Report_Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate_Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate_Request": {
+      "main": [
+        [
+          {
+            "node": "Fetch_Sales_Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch_Metrics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch_Sales_Data": {
+      "main": [
+        [
+          {
+            "node": "Combine_Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch_Metrics": {
+      "main": [
+        [
+          {
+            "node": "Combine_Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combine_Data": {
+      "main": [
+        [
+          {
+            "node": "Generate_Report_Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate_Report_Content": {
+      "main": [
+        [
+          {
+            "node": "Format_Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format_Report": {
+      "main": [
+        [
+          {
+            "node": "Store_Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1"
+}
